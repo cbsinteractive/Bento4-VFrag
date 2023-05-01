@@ -171,3 +171,4 @@ Dolby Vision encryption now properly encrypts in a NAL-unit-aware mode
 
 ### Previous releases
 (no seaparate notes, please refer to commit logs)
+
