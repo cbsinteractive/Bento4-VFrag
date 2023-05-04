@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -16,10 +17,10 @@ type Chunk struct {
 
 type Fragment struct {
 	TrackID           int
-	DestinationOffset uint64
-	Duration          uint64
+	DestinationOffset int64
+	Duration          int64
 	TrackType         string
-	FragmentSize      uint32
+	FragmentSize      int32
 	Traf              string // warning: A very long one.
 	SampleCount       int
 	Chunks            []Chunk
@@ -33,13 +34,17 @@ var (
 	outputFName = flag.String("output", "", "Destination MP4 to write to")
 )
 
-func writeHexAsBinary(outfile *os.File, offset int64, cooked string) error {
+func writeHexAsBinary(outfile *os.File, offset int64, offset_is_end bool, cooked string) error {
 	raw, err := hex.DecodeString(cooked)
 	if err != nil {
 		return err
 	}
 
-	_, err = outfile.Seek(offset, io.SeekStart)
+	if offset_is_end {
+		_, err = outfile.Seek(offset-int64(len(raw)), io.SeekStart)
+	} else {
+		_, err = outfile.Seek(offset, io.SeekStart)
+	}
 	if err != nil {
 		return err
 	}
@@ -69,6 +74,13 @@ func getFragmentSourceRange(frag Fragment) (int64, int64) {
 func writeFragmentsToFile(inMP4 *os.File, outMP4 *os.File, frags []Fragment) {
 	// reader := bufio.NewReader(inMP4)
 	for _, frag := range frags {
+		// Write header atoms.  Need space for the mdat header also.
+		writeHexAsBinary(outMP4, frag.DestinationOffset-8, true, frag.Traf)
+		// Write mdat size and then 'mdat'.
+		bs := make([]byte, 4)
+		binary.LittleEndian.PutUint32(bs, uint32(frag.FragmentSize+8))
+		outMP4.Write(bs)
+		outMP4.Write([]byte("mdat"))
 		// How much of this frag have we written?
 		var currentChunksSizeTotal int64 = 0
 		offset, length := getFragmentSourceRange(frag)
@@ -79,7 +91,6 @@ func writeFragmentsToFile(inMP4 *os.File, outMP4 *os.File, frags []Fragment) {
 		}
 		readBuffer := make([]byte, length)
 		readLen, readErr := reader.Read(readBuffer)
-		//.Read(readBuffer)
 		if (readErr != nil) || (readLen != int(length)) {
 			fmt.Printf("Read of fragment %d failed.  Wanted %d, got %d and error %s\n", frag.DestinationOffset, length, readLen, readErr.Error())
 		}
@@ -95,7 +106,9 @@ func writeFragmentsToFile(inMP4 *os.File, outMP4 *os.File, frags []Fragment) {
 			}
 			// Grab just this chunk into a slice, so we can write it cleanly, since Go lacks args for that.
 			writeSlice := readBuffer[int64(chunk.Offset)-offset : (int64(chunk.Offset) - offset + int64(chunk.Size))]
-			fmt.Print("Writing slice\n")
+			if *verbosity > 0 {
+				fmt.Print("Writing slice\n")
+			}
 			written, writeErr := outMP4.Write(writeSlice)
 			if writeErr != nil {
 				fmt.Printf("Write error: %s\n", writeErr.Error())
@@ -105,7 +118,6 @@ func writeFragmentsToFile(inMP4 *os.File, outMP4 *os.File, frags []Fragment) {
 			currentChunksSizeTotal += int64(chunk.Size)
 		}
 	}
-
 }
 
 func main() {

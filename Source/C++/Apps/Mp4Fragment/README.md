@@ -12,8 +12,9 @@ Output.json has the data necessary for the fragment atoms.  The [traf] atom with
 
 Using The Outputs
 ----
-Create manifests using the *new* data, e.g. the sidx atom.  
 When a request comes in for a fragment or sequence, look it up (i.e. store the JSON in a database indexed by contentID-TrackID-Segment Numer.)
+The Traf field should be converted back to binary, and written *ending* at the DestinationOffset.  
+
 Grab the data from the *original* file at the specified offsets, preferably in one byte range request covering the entire set of offset-size combinations.
 In a loop, memmove them down to form a single contiguous chunk, and serve it.
 
