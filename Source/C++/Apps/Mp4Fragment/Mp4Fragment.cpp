@@ -173,16 +173,18 @@ typedef struct _Chunk {
     AP4_Size size;
 } Chunk;
 
+
+
 // List for vfrag of contiguous blocks of segments.
 // This is not the same as a sample list, as there may be many samples in a contiguous block.
 class FragmentSegmentList {
 public:
     AP4_List<Chunk> m_FragmentRanges;
-    std::list<int>  m_SampleSizes;
     AP4_Offset m_DestinationOffset = 0; // Where in the output file this was (would have been) written.
     AP4_Offset m_FirstOffset = 0;    // First sample location.
     AP4_Offset m_LastOffset = 0;    // Start of the current block.
     AP4_Size   m_CurrentSize = 0;   //  Amount in the current block.
+    int        m_SampleCount = 0;
     AP4_Size   m_FragmentSize = 0;
     AP4_UI32   m_FragmentDuration = 0;
     AP4_Track::Type  m_TrackType;
@@ -199,8 +201,8 @@ public:
         if (m_FirstOffset == 0) {
             m_FirstOffset = start;
         }
-        m_SampleSizes.push_back(size);
         m_FragmentSize += size;
+        m_SampleCount++;
         if (start == m_LastOffset + m_CurrentSize) {
             // Add this chunk to the current chunk.
             m_CurrentSize += size;
@@ -239,27 +241,20 @@ public:
 
     // Warning: Caller must free this result!
     // Returns the fragment ranges as a string.
-    char* ToJSON() {
-        const int max_line_len = 600;
+    char* ToJSON(char* atomhex) {
+        int max_line_len = 600 + strlen(atomhex);
         if (m_laststring) {
             delete(m_laststring);
         }
-        // 20 is for other data being added.
-        int buffer_length =(m_FragmentRanges.ItemCount() + (20 * m_SampleSizes.size()) + 20)  * max_line_len;
+        int buffer_length =m_FragmentRanges.ItemCount() * 60 +  max_line_len;
         m_laststring = (char*)calloc(buffer_length, 1);
         char line_buffer[max_line_len];
-        snprintf(m_laststring, max_line_len, "{\n   \"TrackID\":%d,\n   \"DestinationOffset\":%llu,\n   \"Duration\":%llu,\n   \"TrackType\":%s,\n   \"FragmentSize\":%llu,\n   \"SampleCount\":%d,\n   \"SampleSizes\":[",
+        snprintf(m_laststring, max_line_len, "{\n   \"TrackID\":%d,\n   \"DestinationOffset\":%llu,\n   \"Duration\":%llu,\n   \"TrackType\":%s,\n   \"FragmentSize\":%llu,\n   \"Traf\":\"%s\",\n   \"SampleCount\":%d,\n   \"Chunks\":[\n",
             m_TrackId, m_DestinationOffset, m_FragmentDuration, 
             (m_TrackType == AP4_Track::TYPE_VIDEO ? "\"Video\"":"\"Audio\""),
-            m_FragmentSize, m_SampleSizes.size());
+            m_FragmentSize, atomhex, m_SampleCount);
         
-        // Output sample sizes in an array.
         int i = 0;
-        for (int ssize : m_SampleSizes) {
-            snprintf(line_buffer, max_line_len, "%d%s", ssize, (i + 1 == m_SampleSizes.size() ? "],\n    \"Chunks\":[\n" : ","));
-            strcat(m_laststring, line_buffer);
-            i++;
-        }
         // Output chunk maps, one per line.
         AP4_List<Chunk>::Item* fragment_chunk = m_FragmentRanges.FirstItem();
         i = 1;
@@ -606,7 +601,8 @@ Fragment(AP4_File&                input_file,
     unsigned int sequence_number = Options.sequence_number_start;
     AP4_Position sample_start = 0;
     AP4_UI64 sample_dtsstart = 0;
-    
+    int fragment_index = 0;
+
     for(;;) {
         TrackCursor* cursor = NULL;
 
@@ -731,7 +727,7 @@ Fragment(AP4_File&                input_file,
                    cursor->m_Track->GetSampleCount());
         }
         
-        if ((Options.vfrag) && ( (cursor->m_Track->GetType() == AP4_Track::TYPE_VIDEO) ||  (cursor->m_Track->GetType() == AP4_Track::TYPE_AUDIO) )) {
+        if ((Options.vfrag) && ( (cursor->m_Track->GetType() == AP4_Track::TYPE_VIDEO) ||  (cursor->m_Track->GetType() == AP4_Track::TYPE_AUDIO) ) && (Options.verbosity > 0)) {
             printf(" Track %d - Fragment starts %d, dts %lld. Sample Count: %d\n", 
                 cursor->m_Track->GetId(), sample_start, sample_dtsstart,
                 end_sample_index - cursor->m_SampleIndex);
@@ -788,7 +784,7 @@ Fragment(AP4_File&                input_file,
         }
         traf->AddChild(trun);
         moof->AddChild(traf);
-        
+
         // create a new FragmentInfo object to store the fragment details
         FragmentInfo* fragment = new FragmentInfo(cursor->m_Samples, cursor->m_Tfra, cursor->m_Timestamp, moof);
         fragments.Add(fragment);
@@ -801,6 +797,7 @@ Fragment(AP4_File&                input_file,
         bool all_sample_durations_equal = true;
         bool all_samples_are_sync = true;
         bool only_first_sample_is_sync = true;
+
         for (;;) {
             // if we have one non-zero CTS delta, we'll need to express it
             if (cursor->m_Sample.GetCtsDelta()) {
@@ -916,13 +913,14 @@ Fragment(AP4_File&                input_file,
         if (current_indexed_segment) {
             current_indexed_segment->m_Size += (AP4_UI32)(fragment->m_Moof->GetSize()+fragment->m_MdatSize);
         }
-        
+
         // advance the cursor's fragment index
         ++cursor->m_FragmentIndex;
     }
-    
+
     // write the ftyp atom
     AP4_FtypAtom* ftyp = input_file.GetFileType();
+
     if (ftyp) {
         // keep the existing brand and compatible brands
         AP4_Array<AP4_UI32> compatible_brands;
@@ -943,6 +941,10 @@ Fragment(AP4_File&                input_file,
                                                   compatible_brands.ItemCount());
         ftyp = new_ftyp;
     } else {
+        if (Options.verbosity > 0) {
+            printf("adding ftyp atom\n");
+        }
+
         AP4_UI32 compat[2] = {
             AP4_FILE_BRAND_ISOM,
             AP4_FILE_BRAND_ISO5
@@ -976,6 +978,7 @@ Fragment(AP4_File&                input_file,
         vfrag_stream.Write("[\n",2);
     }
     // write all fragments
+    fragment_index = 0;
     for (AP4_List<FragmentInfo>::Item* item = fragments.FirstItem();
                                        item;
                                        item = item->GetNext()) {
@@ -987,7 +990,6 @@ Fragment(AP4_File&                input_file,
         
         // write the moof
         fragment->m_Moof->Write(output_stream);
-        
         // write mdat
         output_stream.WriteUI32(fragment->m_MdatSize);
         output_stream.WriteUI32(AP4_ATOM_TYPE_MDAT);
@@ -1029,12 +1031,32 @@ Fragment(AP4_File&                input_file,
         }
         if (Options.vfrag) {
             fragmentranges.FinishList();
+
+            AP4_ContainerAtom* traf = AP4_DYNAMIC_CAST(AP4_ContainerAtom, fragment->m_Moof->GetChild(AP4_ATOM_TYPE_TRAF, 0));
+            int rough_size_guess = fragment->m_SampleIndexes.ItemCount() * 8 + 100;  // For hex output. 4 bytes per sample, two bytes per byte.
+
+            AP4_LargeSize atom_dump_size = 0;   // This can be pretty large with all the sample sizes included.
+            AP4_DataBuffer buffer;
+            AP4_MemoryByteStream* atomDump = new AP4_MemoryByteStream(buffer);
+            if (traf == NULL) {
+                printf("ERROR: NULL TRAF\n");
+            }
+            else {
+                traf->Write(*atomDump);
+            }
+            atomDump->GetSize(atom_dump_size);
+            int buffersize = 200 + 2 * atom_dump_size;
+            char                    string_buffer[buffersize]; // Typically tiny.
+            for (unsigned int i=0; i< atom_dump_size; i++) {
+                snprintf(&(string_buffer[i*2]), buffersize - (i*2), "%02x", (unsigned char)atomDump->GetData()[i]);
+            }
+            atomDump->Release();
+
             fragmentranges.m_FragmentDuration = fragment->m_Duration;
             AP4_Sample firstSample;
             fragment->m_Samples->GetSample(0, firstSample);
             
-            char* json = fragmentranges.ToJSON();
-            printf("Fragment Ranges:\n%s\n...\n", json);
+            char* json = fragmentranges.ToJSON(string_buffer);
             if (is_firstFragment) {
                 is_firstFragment = false;
             } else {
@@ -1044,6 +1066,7 @@ Fragment(AP4_File&                input_file,
             // Output the json to the file.
             vfrag_stream.Write(json, strlen(json));
             fragmentranges.ClearList();
+            fragment_index++;
         }
 
     }

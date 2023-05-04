@@ -7,7 +7,8 @@ Also created are an output.sidx and output.json file.
 
 Output.sidx has the binary sidx atom to be handed to players on-request.  
 
-Output.json has the data necessary for the fragment atoms, specifically for the [tfhd] and the [trun] atoms, as well as the source locations in the input file for the trun-referenced samples.
+Output.json has the data necessary for the fragment atoms.  The [traf] atom with the [tfhd] and the [trun] atoms are output in hex, including all sample sizes.
+(That runs to the end of the hex.)  Also, the source locations in the input file for the trun-referenced samples.
 
 Using The Outputs
 ----
@@ -15,3 +16,5 @@ Create manifests using the *new* data, e.g. the sidx atom.
 When a request comes in for a fragment or sequence, look it up (i.e. store the JSON in a database indexed by contentID-TrackID-Segment Numer.)
 Grab the data from the *original* file at the specified offsets, preferably in one byte range request covering the entire set of offset-size combinations.
 In a loop, memmove them down to form a single contiguous chunk, and serve it.
+
+Note that while you can reuse the moov atom from the source file, it won't necessarily be the same size as Bento would create in the fMP4, due to compatibility flags and other additions.  The ftyp atom, for example, is re-created rather than copied.
