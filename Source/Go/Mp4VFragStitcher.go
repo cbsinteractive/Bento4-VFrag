@@ -78,7 +78,7 @@ func writeFragmentsToFile(inMP4 *os.File, outMP4 *os.File, frags []Fragment) {
 		writeHexAsBinary(outMP4, frag.DestinationOffset-8, true, frag.Traf)
 		// Write mdat size and then 'mdat'.
 		bs := make([]byte, 4)
-		binary.LittleEndian.PutUint32(bs, uint32(frag.FragmentSize+8))
+		binary.BigEndian.PutUint32(bs, uint32(frag.FragmentSize+8))
 		outMP4.Write(bs)
 		outMP4.Write([]byte("mdat"))
 		// How much of this frag have we written?
